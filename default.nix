@@ -1,14 +1,14 @@
 {
-  sources ? (import ./flake-compat.nix {root = ./.;}).inputs,
+  sources ? (import ./flake-compat.nix { root = ./.; }).inputs,
   system ? builtins.currentSystem,
-  pkgs ?
-    import sources.nixpkgs {
-      config = {};
-      overlays = [];
-      inherit system;
-    },
-}: {
+  pkgs ? import sources.nixpkgs {
+    config = { };
+    overlays = [ ];
+    inherit system;
+  },
+}:
+{
   shell = pkgs.mkShellNoCC {
-    packages = [];
+    packages = [ ];
   };
 }

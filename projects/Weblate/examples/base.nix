@@ -3,7 +3,8 @@
   lib,
   pkgs,
   ...
-}: {
+}:
+{
   services.weblate = {
     enable = true;
     localDomain = "weblate.example.org";

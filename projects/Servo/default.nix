@@ -1,3 +1,6 @@
-{pkgs, ...} @ args: {
-  packages = {inherit (pkgs) servo;};
+{ pkgs, ... }@args:
+{
+  packages = {
+    inherit (pkgs) servo;
+  };
 }

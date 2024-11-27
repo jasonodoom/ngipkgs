@@ -39,4 +39,4 @@ let
     erethon
   ];
 in
-  infra ++ ngi ++ [deploy]
+infra ++ ngi ++ [ deploy ]

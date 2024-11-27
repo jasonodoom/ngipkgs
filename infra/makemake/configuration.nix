@@ -2,7 +2,8 @@
   pkgs,
   lib,
   ...
-}: {
+}:
+{
   imports = [
     ./buildbot.nix
     ./hardware.nix
@@ -15,7 +16,10 @@
     buildMachines = [
       {
         hostName = "localhost";
-        systems = ["x86_64-linux" "i686-linux"];
+        systems = [
+          "x86_64-linux"
+          "i686-linux"
+        ];
         maxJobs = 16;
         speedFactor = 1;
         supportedFeatures = [
@@ -33,11 +37,19 @@
       options = "--delete-older-than 7d";
     };
     settings = {
-      min-free = let GiB = 1024 * 1024 * 1024; in 4 * GiB;
+      min-free =
+        let
+          GiB = 1024 * 1024 * 1024;
+        in
+        4 * GiB;
       max-jobs = lib.mkDefault 16;
       allowed-uris = "https://github.com/ https://git.savannah.gnu.org/ github: gitlab: git+https:";
       cores = 0;
-      experimental-features = ["nix-command" "flakes" "ca-derivations"];
+      experimental-features = [
+        "nix-command"
+        "flakes"
+        "ca-derivations"
+      ];
       sandbox = true;
     };
   };
@@ -84,13 +96,19 @@
 
   networking = {
     hostId = "5240310e";
-    firewall.allowedTCPPorts = [80 443];
+    firewall.allowedTCPPorts = [
+      80
+      443
+    ];
     firewall.allowPing = true;
     firewall.logRefusedConnections = true;
   };
 
   boot.loader.grub = {
-    devices = ["/dev/nvme0n1" "/dev/nvme1n1"];
+    devices = [
+      "/dev/nvme0n1"
+      "/dev/nvme1n1"
+    ];
     copyKernels = true;
   };
 }

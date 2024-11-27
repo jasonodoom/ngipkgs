@@ -18,81 +18,84 @@
   # See <https://github.com/ngi-nix/ngipkgs/issues/24> for plans to support Darwin.
   inputs.systems.url = "github:nix-systems/default-linux";
 
-  outputs = {
-    self,
-    nixpkgs,
-    flake-utils,
-    sops-nix,
-    pre-commit-hooks,
-    dream2nix,
-    buildbot-nix,
-    ...
-  } @ inputs: let
-    # Take Nixpkgs' lib and update it with the definitions in ./lib.nix
-    lib = import (nixpkgs + "/lib");
-    lib' = import ./lib.nix {inherit lib;};
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+      sops-nix,
+      pre-commit-hooks,
+      dream2nix,
+      buildbot-nix,
+      ...
+    }@inputs:
+    let
+      # Take Nixpkgs' lib and update it with the definitions in ./lib.nix
+      lib = import (nixpkgs + "/lib");
+      lib' = import ./lib.nix { inherit lib; };
 
-    inherit
-      (lib)
-      attrValues
-      concatMapAttrs
-      filterAttrs
-      mapAttrs
-      recursiveUpdate
-      ;
+      inherit (lib)
+        attrValues
+        concatMapAttrs
+        filterAttrs
+        mapAttrs
+        recursiveUpdate
+        ;
 
-    # Imported from Nixpkgs
-    nixosSystem = args:
-      import (nixpkgs + "/nixos/lib/eval-config.nix") ({
-          inherit lib;
-          system = null;
-        }
-        // args);
+      # Imported from Nixpkgs
+      nixosSystem =
+        args:
+        import (nixpkgs + "/nixos/lib/eval-config.nix") (
+          {
+            inherit lib;
+            system = null;
+          }
+          // args
+        );
 
-    overlay = final: prev:
-      import ./pkgs/by-name {
-        pkgs = prev;
-        inherit lib dream2nix;
+      overlay =
+        final: prev:
+        import ./pkgs/by-name {
+          pkgs = prev;
+          inherit lib dream2nix;
+        };
+
+      # NGI projects are imported from ./projects/default.nix.
+      # Each project includes packages, and optionally, modules, examples and tests.
+
+      # Note that modules and examples are system-agnostic, so import them first.
+      rawNgiProjects = import ./projects {
+        inherit lib;
+        sources = {
+          inherit inputs;
+        };
       };
 
-    # NGI projects are imported from ./projects/default.nix.
-    # Each project includes packages, and optionally, modules, examples and tests.
+      rawExamples = lib'.flattenAttrs "/" (
+        mapAttrs (_: project: mapAttrs (_: example: example.path) project.nixos.examples) rawNgiProjects
+      );
 
-    # Note that modules and examples are system-agnostic, so import them first.
-    rawNgiProjects = import ./projects {
-      inherit lib;
-      sources = {inherit inputs;};
-    };
+      rawNixosModules = lib'.flattenAttrs "." (
+        lib.foldl recursiveUpdate { } (
+          attrValues (mapAttrs (_: project: project.nixos.modules) rawNgiProjects)
+        )
+      );
 
-    rawExamples = lib'.flattenAttrs "/" (
-      mapAttrs
-      (_: project: mapAttrs (_: example: example.path) project.nixos.examples)
-      rawNgiProjects
-    );
-
-    rawNixosModules = lib'.flattenAttrs "." (lib.foldl recursiveUpdate {} (attrValues (
-      mapAttrs (_: project: project.nixos.modules) rawNgiProjects
-    )));
-
-    nixosModules =
-      {
+      nixosModules = {
         # The default module adds the default overlay on top of Nixpkgs.
         # This is so that `ngipkgs` can be used alongside `nixpkgs` in a configuration.
-        default.nixpkgs.overlays = [overlay];
-      }
-      // rawNixosModules;
+        default.nixpkgs.overlays = [ overlay ];
+      } // rawNixosModules;
 
-    # Next, extend the modules with modules that are additionally required in the tests and examples.
-    extendedNixosModules =
-      nixosModules
-      // {
+      # Next, extend the modules with modules that are additionally required in the tests and examples.
+      extendedNixosModules = nixosModules // {
         sops-nix = sops-nix.nixosModules.default;
       };
 
-    mkNixosSystem = config:
-      nixosSystem {
-        modules =
-          [
+      mkNixosSystem =
+        config:
+        nixosSystem {
+          modules = [
             config
             {
               nixpkgs.hostPlatform = "x86_64-linux";
@@ -106,154 +109,163 @@
                 loader.grub.enable = false;
               };
             }
-          ]
-          ++ attrValues extendedNixosModules;
-      };
-
-    toplevel = machine: machine.config.system.build.toplevel;
-
-    # Then, import packages and tests, which are system-dependent.
-    importNgiProjects = pkgs:
-      import ./projects {
-        inherit lib pkgs;
-        sources = {
-          inherit inputs;
-          examples = rawExamples;
-          modules = extendedNixosModules;
+          ] ++ attrValues extendedNixosModules;
         };
+
+      toplevel = machine: machine.config.system.build.toplevel;
+
+      # Then, import packages and tests, which are system-dependent.
+      importNgiProjects =
+        pkgs:
+        import ./projects {
+          inherit lib pkgs;
+          sources = {
+            inherit inputs;
+            examples = rawExamples;
+            modules = extendedNixosModules;
+          };
+        };
+
+      # Finally, define the system-agnostic outputs.
+      systemAgnosticOutputs = {
+        nixosConfigurations = mapAttrs (_: mkNixosSystem) rawExamples // {
+          makemake = import ./infra/makemake { inherit inputs; };
+        };
+
+        inherit nixosModules;
+
+        # Overlays a package set (e.g. Nixpkgs) with the packages defined in this flake.
+        overlays.default = overlay;
       };
 
-    # Finally, define the system-agnostic outputs.
-    systemAgnosticOutputs = {
-      nixosConfigurations =
-        mapAttrs (_: mkNixosSystem) rawExamples
-        // {makemake = import ./infra/makemake {inherit inputs;};};
-
-      inherit nixosModules;
-
-      # Overlays a package set (e.g. Nixpkgs) with the packages defined in this flake.
-      overlays.default = overlay;
-    };
-
-    eachDefaultSystemOutputs = flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = import nixpkgs {
-        inherit system;
-        overlays = [overlay];
-      };
-
-      ngipkgs = import ./pkgs/by-name {inherit pkgs lib dream2nix;};
-
-      ngiProjects = importNgiProjects (pkgs // ngipkgs);
-
-      optionsDoc = pkgs.nixosOptionsDoc {
-        options =
-          (nixosSystem {
+      eachDefaultSystemOutputs = flake-utils.lib.eachDefaultSystem (
+        system:
+        let
+          pkgs = import nixpkgs {
             inherit system;
-            modules =
-              [
-                {
-                  networking = {
-                    domain = "invalid";
-                    hostName = "options";
-                  };
-
-                  system.stateVersion = "23.05";
-                }
-              ]
-              ++ attrValues nixosModules;
-          })
-          .options;
-      };
-    in rec {
-      packages =
-        ngipkgs
-        // {
-          overview = import ./overview {
-            inherit lib lib' pkgs self;
-            projects = ngiProjects;
-            options = optionsDoc.optionsNix;
+            overlays = [ overlay ];
           };
 
-          options =
-            pkgs.runCommand "options.json"
-            {
-              build = optionsDoc.optionsJSON;
-            } ''
-              mkdir $out
-              cp $build/share/doc/nixos/options.json $out/
-            '';
-        };
+          ngipkgs = import ./pkgs/by-name { inherit pkgs lib dream2nix; };
 
-      # buildbot executes `nix flake check`, therefore this output
-      # should only contain derivations that can built within CI.
-      # See ./infra/makemake/buildbot.nix for how it is set up.
-      # NOTE: `nix flake check` requires a flat attribute set of derivations, which is an annoying constraint...
-      checks = let
-        # everything must evaluate for checks to run
-        nonBrokenPackages = filterAttrs (_: v: ! v.meta.broken or false) ngipkgs;
+          ngiProjects = importNgiProjects (pkgs // ngipkgs);
 
-        checksForAllProjects = let
-          checksForProject = projectName: project: let
-            checksForNixosTests =
-              concatMapAttrs
-              (testName: test: {"projects/${projectName}/nixos/tests/${testName}" = test;})
-              project.nixos.tests;
+          optionsDoc = pkgs.nixosOptionsDoc {
+            options =
+              (nixosSystem {
+                inherit system;
+                modules = [
+                  {
+                    networking = {
+                      domain = "invalid";
+                      hostName = "options";
+                    };
 
-            checksForNixosExamples =
-              concatMapAttrs
-              (exampleName: example: {"projects/${projectName}/nixos/examples/${exampleName}" = toplevel (mkNixosSystem example.path);})
-              project.nixos.examples;
-          in
-            checksForNixosTests // checksForNixosExamples;
+                    system.stateVersion = "23.05";
+                  }
+                ] ++ attrValues nixosModules;
+              }).options;
+          };
         in
-          concatMapAttrs checksForProject (importNgiProjects (pkgs // nonBrokenPackages));
-
-        checksForAllPackages = let
-          checksForPackage = packageName: package: let
-            checksForPackageDerivation = {"packages/${packageName}" = package;};
-            checksForPackagePassthruTests =
-              concatMapAttrs
-              (passthruName: test: {"packages/${packageName}/passthru/${passthruName}" = test;})
-              (package.passthru.tests or {});
-          in
-            checksForPackageDerivation // checksForPackagePassthruTests;
-        in
-          concatMapAttrs checksForPackage nonBrokenPackages;
-
-        checksForInfrastructure = {
-          "infra/pre-commit" = pre-commit-hooks.lib.${system}.run {
-            src = ./.;
-            hooks = {
-              actionlint.enable = true;
-              nixfmt-rfc-style.enable = true;
+        rec {
+          packages = ngipkgs // {
+            overview = import ./overview {
+              inherit
+                lib
+                lib'
+                pkgs
+                self
+                ;
+              projects = ngiProjects;
+              options = optionsDoc.optionsNix;
             };
+
+            options =
+              pkgs.runCommand "options.json"
+                {
+                  build = optionsDoc.optionsJSON;
+                }
+                ''
+                  mkdir $out
+                  cp $build/share/doc/nixos/options.json $out/
+                '';
           };
-          "infra/makemake" = toplevel self.nixosConfigurations.makemake;
-          "infra/overview" = self.packages.${system}.overview;
-        };
-      in
-        checksForInfrastructure
-        // checksForAllProjects
-        // checksForAllPackages;
 
-      devShells.default = pkgs.mkShell {
-        inherit (checks."infra/pre-commit") shellHook;
-        buildInputs = checks."infra/pre-commit".enabledPackages;
-      };
+          # buildbot executes `nix flake check`, therefore this output
+          # should only contain derivations that can built within CI.
+          # See ./infra/makemake/buildbot.nix for how it is set up.
+          # NOTE: `nix flake check` requires a flat attribute set of derivations, which is an annoying constraint...
+          checks =
+            let
+              # everything must evaluate for checks to run
+              nonBrokenPackages = filterAttrs (_: v: !v.meta.broken or false) ngipkgs;
 
-      formatter = pkgs.writeShellApplication {
-        name = "formatter";
-        text = ''
-          # shellcheck disable=all
-          shell-hook () {
-            ${checks."infra/pre-commit".shellHook}
-          }
+              checksForAllProjects =
+                let
+                  checksForProject =
+                    projectName: project:
+                    let
+                      checksForNixosTests = concatMapAttrs (testName: test: {
+                        "projects/${projectName}/nixos/tests/${testName}" = test;
+                      }) project.nixos.tests;
 
-          shell-hook
-          pre-commit run --all-files
-        '';
-      };
-    });
-  in
+                      checksForNixosExamples = concatMapAttrs (exampleName: example: {
+                        "projects/${projectName}/nixos/examples/${exampleName}" = toplevel (mkNixosSystem example.path);
+                      }) project.nixos.examples;
+                    in
+                    checksForNixosTests // checksForNixosExamples;
+                in
+                concatMapAttrs checksForProject (importNgiProjects (pkgs // nonBrokenPackages));
+
+              checksForAllPackages =
+                let
+                  checksForPackage =
+                    packageName: package:
+                    let
+                      checksForPackageDerivation = {
+                        "packages/${packageName}" = package;
+                      };
+                      checksForPackagePassthruTests = concatMapAttrs (passthruName: test: {
+                        "packages/${packageName}/passthru/${passthruName}" = test;
+                      }) (package.passthru.tests or { });
+                    in
+                    checksForPackageDerivation // checksForPackagePassthruTests;
+                in
+                concatMapAttrs checksForPackage nonBrokenPackages;
+
+              checksForInfrastructure = {
+                "infra/pre-commit" = pre-commit-hooks.lib.${system}.run {
+                  src = ./.;
+                  hooks = {
+                    actionlint.enable = true;
+                    nixfmt-rfc-style.enable = true;
+                  };
+                };
+                "infra/makemake" = toplevel self.nixosConfigurations.makemake;
+                "infra/overview" = self.packages.${system}.overview;
+              };
+            in
+            checksForInfrastructure // checksForAllProjects // checksForAllPackages;
+
+          devShells.default = pkgs.mkShell {
+            inherit (checks."infra/pre-commit") shellHook;
+            buildInputs = checks."infra/pre-commit".enabledPackages;
+          };
+
+          formatter = pkgs.writeShellApplication {
+            name = "formatter";
+            text = ''
+              # shellcheck disable=all
+              shell-hook () {
+                ${checks."infra/pre-commit".shellHook}
+              }
+
+              shell-hook
+              pre-commit run --all-files
+            '';
+          };
+        }
+      );
+    in
     eachDefaultSystemOutputs // systemAgnosticOutputs;
 }
