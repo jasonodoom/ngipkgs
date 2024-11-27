@@ -64,7 +64,7 @@
           <table>
             <tr>
               <td>Description:</td>
-              <td>${value.description}</td>
+              <td>${lib.escapeXML value.description}</td>
             </tr>
             <tr>
               <td>Type:</td>
@@ -172,5 +172,5 @@ in
       --in-place \
       $out/index.html
 
-    vnu -Werror --format json $out/*.html 2>&1 | jq
+    vnu -Werror --format json $out/*.html | jq
   ''
