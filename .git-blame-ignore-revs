@@ -1,2 +1,2 @@
-# Format all files in /infra with `nix fmt`
-c93855ba5533059df21f1936b08c55b465f651a7
+# Format all files in /infra with `nixfmt-rfc-style`
+3f802071f8d1429b6e634e99cfba554f9f5b7330
